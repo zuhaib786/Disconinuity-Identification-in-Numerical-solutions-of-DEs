@@ -31,6 +31,8 @@ class Annihilator:
         for i in indices:
             if i>= index:
                 normFactor += constants[i - l_index]
+            # can be made faster using matrix multiplication
+            # Will update that later
             sm += constants[i - l_index] * fvalues[i]
         sm = sm/normFactor
         return sm
