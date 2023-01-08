@@ -61,6 +61,7 @@ class Annihilator:
                 r =i
         
         constants = self.getConstants(indices)
+        constants = constants[0]
         normFactor = 0
         sm = 0
         for i, index in enumerate(indices):
@@ -76,11 +77,11 @@ class Annihilator:
         We use np.linalg.solve method of numpy to solve the system efficiently
         """
         mat = self.createMatrix(indices)
-        gaussian = np.random.randn(*mat.shape)*0.000001
-        mat = mat + gaussian
+        # gaussian = np.random.randn(*mat.shape)*0.000001
+        # mat = mat + gaussian
         # print(mat)
         load = self.getLoadMatrix()
-        return np.linalg.solve(mat, load)
+        return np.linalg.lstsq(mat, load,rcond=None)
     def getLoadMatrix(self):
         """
         Get the load matrix 
