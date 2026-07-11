@@ -18,4 +18,8 @@ def get_indicator(name, **kwargs):
         from tci.indicators.learned import GNNIndicator
 
         return GNNIndicator(**kwargs)
+    if name == "mlp":
+        from tci.indicators.learned import MLPIndicator
+
+        return MLPIndicator(**kwargs)
     raise ValueError(f"unknown indicator {name!r}")

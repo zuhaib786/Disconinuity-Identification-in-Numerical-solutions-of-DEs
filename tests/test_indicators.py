@@ -29,9 +29,11 @@ def test_minmod_flags_near_fronts_in_loop():
         indicator=MinmodIndicator(),
         record_flags=True,
     )
-    flags = hist[-1][1]
-    assert _near_jumps(flags, tol=10)
-    assert flags.sum() <= 12
+    # Union of flags over the run tracks the jump trajectories 40->45, 60->65.
+    union = np.any([f for _, f in hist], axis=0)
+    assert _near_jumps(union, tol=10)
+    assert union.sum() <= 30
+    assert max(f.sum() for _, f in hist) <= 12
 
 
 def test_kxrcf_flags_near_fronts_in_loop():
@@ -44,7 +46,8 @@ def test_kxrcf_flags_near_fronts_in_loop():
         indicator=KXRCFIndicator(threshold=1.0, a=1.0),
         record_flags=True,
     )
-    assert _near_jumps(hist[-1][1], tol=20)
+    union = np.any([f for _, f in hist], axis=0)
+    assert _near_jumps(union, tol=20)
 
 
 def test_pa_flags_box_edges_on_projection():

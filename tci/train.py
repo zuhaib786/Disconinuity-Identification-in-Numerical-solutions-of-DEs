@@ -27,7 +27,14 @@ DEFAULTS = {
         "crop": False,
         "val_fraction": 0.2,
     },
-    "model": {"conv": "gat", "hidden": 32, "heads": 8, "dropout": 0.2, "layers": 2},
+    "model": {
+        "type": "gnn",  # gnn | mlp (fixed-stencil Ray-Hesthaven-style baseline)
+        "conv": "gat",
+        "hidden": 32,
+        "heads": 8,
+        "dropout": 0.2,
+        "layers": 2,
+    },
     "train": {"epochs": 60, "lr": 1e-3, "batch_size": 32, "threshold": 0.1},
 }
 
@@ -79,12 +86,40 @@ def make_dataset(cfg, seed):
     raise ValueError(f"unknown data mode {cfg['mode']!r}")
 
 
+def _epoch_loop(model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, n_train):
+    """Shared train/eval loop; returns per-epoch history."""
+    import torch
+
+    threshold = cfg["train"]["threshold"]
+    history = []
+    for epoch in range(cfg["train"]["epochs"]):
+        model.train()
+        total = 0.0
+        for batch in loader:
+            opt.zero_grad()
+            logits, target, weight = batches_fn(batch)
+            loss = loss_fn(logits, target)
+            loss.backward()
+            opt.step()
+            total += float(loss.detach()) * weight
+        train_loss = total / n_train
+
+        model.eval()
+        with torch.no_grad():
+            y_true, y_prob = eval_fn()
+        metrics = label_metrics(y_true, y_prob, threshold)
+        history.append({"epoch": epoch, "train_loss": train_loss, **metrics})
+        if epoch % 5 == 0 or epoch == cfg["train"]["epochs"] - 1:
+            print(
+                f"epoch {epoch:3d}  loss {train_loss:.4f}  "
+                f"P {metrics['precision']:.3f}  R {metrics['recall']:.3f}  "
+                f"F1 {metrics['f1']:.3f}"
+            )
+    return history
+
+
 def train(config, out_dir):
     import torch
-    from torch_geometric.loader import DataLoader
-
-    from tci.data.graphs import sample_to_data
-    from tci.models import GNNDetector
 
     cfg = _merge(DEFAULTS, config)
     seed = cfg["seed"]
@@ -96,56 +131,98 @@ def train(config, out_dir):
 
     t0 = time.time()
     samples = make_dataset(cfg["data"], seed)
-    dataset = [sample_to_data(s) for s in samples]
-    n_val = max(1, int(len(dataset) * cfg["data"]["val_fraction"]))
-    train_set, val_set = dataset[n_val:], dataset[:n_val]
+    n_val = max(1, int(len(samples) * cfg["data"]["val_fraction"]))
     print(
-        f"dataset: {len(train_set)} train / {len(val_set)} val graphs "
+        f"dataset: {len(samples) - n_val} train / {n_val} val samples "
         f"({time.time() - t0:.1f}s to generate)"
     )
 
-    in_dim = dataset[0].x.shape[1]
-    model = GNNDetector(in_dim=in_dim, **cfg["model"])
-    opt = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
-    loss_fn = torch.nn.BCEWithLogitsLoss()
-    loader = DataLoader(train_set, batch_size=cfg["train"]["batch_size"], shuffle=True)
-
-    threshold = cfg["train"]["threshold"]
-    history = []
-    for epoch in range(cfg["train"]["epochs"]):
-        model.train()
-        total = 0.0
-        for batch in loader:
-            opt.zero_grad()
-            logits = model(batch.x, batch.edge_index)
-            loss = loss_fn(logits, batch.y)
-            loss.backward()
-            opt.step()
-            total += float(loss.detach()) * batch.num_graphs
-        train_loss = total / len(train_set)
-
-        model.eval()
-        probs, trues = [], []
-        with torch.no_grad():
-            for d in val_set:
-                probs.append(torch.sigmoid(model(d.x, d.edge_index)).numpy())
-                trues.append(d.y.numpy().astype(bool))
-        metrics = label_metrics(
-            np.concatenate(trues), np.concatenate(probs), threshold
-        )
-        history.append({"epoch": epoch, "train_loss": train_loss, **metrics})
-        if epoch % 5 == 0 or epoch == cfg["train"]["epochs"] - 1:
-            print(
-                f"epoch {epoch:3d}  loss {train_loss:.4f}  "
-                f"P {metrics['precision']:.3f}  R {metrics['recall']:.3f}  "
-                f"F1 {metrics['f1']:.3f}"
-            )
+    model_cfg = dict(cfg["model"])
+    model_type = model_cfg.pop("type", "gnn")
+    if model_type == "gnn":
+        model, history = _train_gnn(samples, n_val, model_cfg, cfg)
+    elif model_type == "mlp":
+        model, history = _train_mlp(samples, n_val, model_cfg, cfg)
+    else:
+        raise ValueError(f"unknown model type {model_type!r}")
 
     model.save(out / "model.pt")
     (out / "config.yaml").write_text(yaml.safe_dump(cfg))
     (out / "metrics.json").write_text(json.dumps(history, indent=2))
     print(f"saved model + metrics to {out}")
     return model, history[-1]
+
+
+def _train_gnn(samples, n_val, model_cfg, cfg):
+    import torch
+    from torch_geometric.loader import DataLoader
+
+    from tci.data.graphs import sample_to_data
+    from tci.models import GNNDetector
+
+    dataset = [sample_to_data(s) for s in samples]
+    train_set, val_set = dataset[n_val:], dataset[:n_val]
+
+    model = GNNDetector(in_dim=dataset[0].x.shape[1], **model_cfg)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+    loader = DataLoader(train_set, batch_size=cfg["train"]["batch_size"], shuffle=True)
+
+    def batches_fn(batch):
+        return model(batch.x, batch.edge_index), batch.y, batch.num_graphs
+
+    def eval_fn():
+        probs, trues = [], []
+        for d in val_set:
+            probs.append(torch.sigmoid(model(d.x, d.edge_index)).numpy())
+            trues.append(d.y.numpy().astype(bool))
+        return np.concatenate(trues), np.concatenate(probs)
+
+    history = _epoch_loop(
+        model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, len(train_set)
+    )
+    return model, history
+
+
+def _train_mlp(samples, n_val, model_cfg, cfg):
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from tci.data.features import stencil_features
+    from tci.models import MLPDetector
+
+    # Only the MLP-relevant hyperparameters apply.
+    model_cfg = {k: v for k, v in model_cfg.items() if k in ("hidden", "dropout")}
+
+    def to_xy(subset):
+        X = np.concatenate([stencil_features(s.u) for s in subset])
+        y = np.concatenate([s.labels for s in subset]).astype(np.float32)
+        return torch.from_numpy(X), torch.from_numpy(y)
+
+    X_val, y_val = to_xy(samples[:n_val])
+    X_tr, y_tr = to_xy(samples[n_val:])
+
+    model = MLPDetector(in_dim=X_tr.shape[1], **model_cfg)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+    loader = DataLoader(
+        TensorDataset(X_tr, y_tr),
+        batch_size=cfg["train"]["batch_size"] * 64,  # rows, not graphs
+        shuffle=True,
+    )
+
+    def batches_fn(batch):
+        xb, yb = batch
+        return model(xb), yb, len(xb)
+
+    def eval_fn():
+        prob = torch.sigmoid(model(X_val)).numpy()
+        return y_val.numpy().astype(bool), prob
+
+    history = _epoch_loop(
+        model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, len(X_tr)
+    )
+    return model, history
 
 
 def main():

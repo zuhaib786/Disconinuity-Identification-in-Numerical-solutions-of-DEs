@@ -33,3 +33,27 @@ class GNNIndicator(Indicator):
         with torch.no_grad():
             prob = torch.sigmoid(self.model(feats, edges)).numpy()
         return prob > self.threshold
+
+
+class MLPIndicator(Indicator):
+    """Fixed-stencil MLP baseline (Ray & Hesthaven, JCP 2018 style)."""
+
+    def __init__(self, model_path=None, model=None, threshold=0.5):
+        from tci.models import MLPDetector
+
+        if model is None:
+            if model_path is None:
+                raise ValueError("provide model or model_path")
+            model = MLPDetector.load(model_path)
+        self.model = model.eval()
+        self.threshold = float(threshold)
+
+    def flag(self, solver, u):
+        import torch
+
+        from tci.data.features import stencil_features
+
+        feats = torch.from_numpy(stencil_features(u, bc=solver.bc))
+        with torch.no_grad():
+            prob = torch.sigmoid(self.model(feats)).numpy()
+        return prob > self.threshold

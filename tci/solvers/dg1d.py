@@ -1,9 +1,14 @@
-"""1D nodal discontinuous Galerkin solver for the linear advection equation
+"""1D nodal discontinuous Galerkin solvers for hyperbolic conservation laws
 
-    u_t + a u_x = 0
+    u_t + f(u)_x = 0
 
-with periodic or inflow/outflow boundary conditions, low-storage RK4 time
-stepping, and pluggable troubled-cell indicator + limiter.
+with periodic, inflow or transmissive boundary conditions, low-storage RK4
+time stepping, and pluggable troubled-cell indicator + limiter.
+
+``DG1DBase`` holds the mesh, reference operators and the generic solve loop;
+``DG1D`` is the linear advection solver (f(u) = a u, upwind flux) used
+throughout the thesis. See tci.solvers.burgers / tci.solvers.euler for the
+nonlinear problems.
 """
 
 import numpy as np
@@ -39,21 +44,19 @@ RK4C = np.array(
     ]
 )
 
+BCS = ("periodic", "inflow", "transmissive")
 
-class DG1D:
-    """Nodal DG discretization of a 1D interval.
 
-    Parameters
-    ----------
-    xmin, xmax : domain bounds
-    K : number of elements
-    N : polynomial order per element (Np = N + 1 nodes)
-    bc : "periodic" or "inflow" (inflow value from ``bc_func``, outflow free)
-    bc_func : callable u_in(x) used as u(x - a t) at the inflow boundary
+class DG1DBase:
+    """Mesh, reference-element operators and the generic RK solve loop.
+
+    Subclasses implement ``rhs(u, time)`` and ``max_speed(u)`` (used for the
+    CFL time step), and optionally ``local_velocity(u)`` (used by KXRCF to
+    pick the inflow face).
     """
 
     def __init__(self, xmin, xmax, K, N, bc="periodic", bc_func=None):
-        if bc not in ("periodic", "inflow"):
+        if bc not in BCS:
             raise ValueError(f"unknown bc {bc!r}")
         if bc == "inflow" and bc_func is None:
             raise ValueError("bc='inflow' requires bc_func")
@@ -98,16 +101,116 @@ class DG1D:
                 mask[max(k, 0)] = True
         return mask
 
+    def traces(self, u):
+        """Interior (M) and exterior (P) values at the two faces, shape (2, K).
+
+        Periodic BCs wrap; otherwise the boundary exterior value equals the
+        interior one (transmissive; inflow solvers override the boundary
+        flux afterwards).
+        """
+        uM = np.vstack([u[0, :], u[-1, :]])
+        if self.bc == "periodic":
+            uP = np.vstack([np.roll(u[-1, :], 1), np.roll(u[0, :], -1)])
+        else:
+            uP = np.vstack(
+                [
+                    np.concatenate(([u[0, 0]], u[-1, :-1])),
+                    np.concatenate((u[0, 1:], [u[-1, -1]])),
+                ]
+            )
+        return uM, uP
+
     # ------------------------------------------------------------------
+    def rhs(self, u, time):
+        raise NotImplementedError
+
+    def max_speed(self, u):
+        raise NotImplementedError
+
+    def local_velocity(self, u):
+        """Characteristic velocity per cell (K,), used to pick inflow faces."""
+        raise NotImplementedError
+
+    def solve(
+        self,
+        u0,
+        final_time,
+        indicator=None,
+        limiter=None,
+        cfl=0.375,
+        record_flags=False,
+    ):
+        """Evolve u0 (nodal array (Np, K) or callable) to ``final_time``.
+
+        When ``indicator`` is given, after every RK stage the flagged cells
+        are limited with ``limiter`` (default: minmod MUSCL limiter). The
+        time step is recomputed each step from ``max_speed`` (CFL).
+
+        Returns u, or (u, history) when record_flags is True; history is a
+        list of (time, flags) per time step.
+        """
+        from tci.limiters import limit_cells
+
+        u = self.project(u0) if callable(u0) else np.array(u0, dtype=float)
+        if limiter is None:
+            limiter = limit_cells
+
+        xmin_node = np.min(np.abs(self.x[0, :] - self.x[1, :]))
+
+        history = []
+        resu = np.zeros_like(u)
+        time = 0.0
+        # A blowing-up solution drives max_speed up and dt towards zero;
+        # cap the step count so that surfaces as an error, not a hang.
+        max_steps = int(50 * np.ceil(final_time * self.max_speed(u) / (cfl * xmin_node)) + 1e4)
+        steps = 0
+        while time < final_time - 1e-12:
+            steps += 1
+            if steps > max_steps or not np.all(np.isfinite(u)):
+                raise RuntimeError(
+                    f"solve diverged: step {steps}, t={time:.3g}/{final_time}, "
+                    f"max_speed={self.max_speed(u):.3g} (under-limited blow-up?)"
+                )
+            dt = min(cfl / self.max_speed(u) * xmin_node, final_time - time)
+            if dt < 1e-9 * final_time:
+                raise RuntimeError(
+                    f"solve diverged: dt collapsed at t={time:.3g}/{final_time} "
+                    f"(max_speed={self.max_speed(u):.3g}; under-limited blow-up?)"
+                )
+            flags = None
+            for stage in range(5):
+                rhsu = self.rhs(u, time + RK4C[stage] * dt)
+                resu = RK4A[stage] * resu + dt * rhsu
+                u = u + RK4B[stage] * resu
+                if indicator is not None:
+                    flags = indicator.flag(self, u)
+                    u = limiter(self, u, flags)
+            time += dt
+            if record_flags and flags is not None:
+                history.append((time, flags))
+
+        if record_flags:
+            return u, history
+        return u
+
+
+class DG1D(DG1DBase):
+    """Linear advection u_t + a u_x = 0 with the upwind flux.
+
+    The speed ``a`` is passed to :meth:`advect` (kept from the original
+    API); ``solve`` uses the last speed set.
+    """
+
+    def __init__(self, xmin, xmax, K, N, bc="periodic", bc_func=None):
+        super().__init__(xmin, xmax, K, N, bc=bc, bc_func=bc_func)
+        self.a = 1.0
+
     def advec_rhs(self, u, time, a, alpha=0.0):
         """RHS of the semi-discrete advection equation.
 
         alpha = 0 gives the upwind flux, alpha = 1 the central flux.
         """
-        # Interior (M) and exterior (P) trace values at the two faces.
-        uM = np.vstack([u[0, :], u[-1, :]])
-        uP = np.vstack([np.roll(u[-1, :], 1), np.roll(u[0, :], -1)])
-
+        uM, uP = self.traces(u)
         du = (uM - uP) * (a * self.nx - (1 - alpha) * np.abs(a * self.nx)) / 2.0
 
         if self.bc == "inflow":
@@ -130,51 +233,16 @@ class DG1D:
 
         return -a * self.rx * (self.Dr @ u) + self.LIFT @ (self.Fscale * du)
 
-    def advect(
-        self,
-        u0,
-        a,
-        final_time,
-        indicator=None,
-        limiter=None,
-        cfl=0.375,
-        record_flags=False,
-    ):
-        """Advect u0 (nodal array (Np, K) or callable) to ``final_time``.
+    def rhs(self, u, time):
+        return self.advec_rhs(u, time, self.a)
 
-        When ``indicator`` is given, after every RK stage the flagged cells
-        are limited with ``limiter`` (default: minmod MUSCL limiter).
+    def max_speed(self, u):
+        return np.abs(self.a)
 
-        Returns u, or (u, history) when record_flags is True; history is a
-        list of (time, flags) per time step.
-        """
-        from tci.limiters import limit_cells
+    def local_velocity(self, u):
+        return np.full(self.K, self.a)
 
-        u = self.project(u0) if callable(u0) else np.array(u0, dtype=float)
-        if limiter is None:
-            limiter = limit_cells
-
-        xmin_node = np.min(np.abs(self.x[0, :] - self.x[1, :]))
-        dt = cfl / np.abs(a) * xmin_node
-        n_steps = int(np.ceil(final_time / dt))
-        dt = final_time / n_steps
-
-        history = []
-        resu = np.zeros_like(u)
-        time = 0.0
-        for _ in range(n_steps):
-            flags = None
-            for stage in range(5):
-                rhsu = self.advec_rhs(u, time + RK4C[stage] * dt, a)
-                resu = RK4A[stage] * resu + dt * rhsu
-                u = u + RK4B[stage] * resu
-                if indicator is not None:
-                    flags = indicator.flag(self, u)
-                    u = limiter(self, u, flags)
-            time += dt
-            if record_flags and flags is not None:
-                history.append((time, flags))
-
-        if record_flags:
-            return u, history
-        return u
+    def advect(self, u0, a, final_time, **kwargs):
+        """Advect u0 with speed ``a`` to ``final_time`` (see ``solve``)."""
+        self.a = float(a)
+        return self.solve(u0, final_time, **kwargs)

@@ -1,0 +1,22 @@
+# Fixed-stencil MLP baseline (in the style of Ray & Hesthaven, JCP 2018):
+# per-cell classification from (v_{k-1}, v_k, v_{k+1}, u_k left/right
+# interface values). Same data pipeline as the GNN for a fair comparison.
+seed: 0
+data:
+  mode: exact
+  n_samples: 2000
+  N: 1
+  k_range: [50, 150]
+  max_disc: 5
+  n_fourier: 15
+  crop: false
+  val_fraction: 0.2
+model:
+  type: mlp
+  hidden: [32, 32, 32]
+  dropout: 0.0
+train:
+  epochs: 60
+  lr: 0.001
+  batch_size: 32
+  threshold: 0.5
