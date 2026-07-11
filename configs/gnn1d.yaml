@@ -1,0 +1,23 @@
+# One-dimensional GNN troubled-cell detector (thesis Table 5.1 architecture,
+# trained on exact piecewise-Fourier data with randomized mesh lengths).
+seed: 0
+data:
+  mode: exact          # exact | numerical (solver-in-the-loop, slower)
+  n_samples: 2000
+  N: 1                 # polynomial order of the DG space (Np = N+1 features)
+  k_range: [50, 150]   # random mesh length per sample
+  max_disc: 5
+  n_fourier: 15
+  crop: false
+  val_fraction: 0.2
+model:
+  conv: gat            # gat | gcn | sage  (architecture ablation)
+  hidden: 32
+  heads: 8
+  dropout: 0.2
+  layers: 2
+train:
+  epochs: 60
+  lr: 0.001
+  batch_size: 32
+  threshold: 0.1       # probability threshold for flagging (thesis: 0.1)

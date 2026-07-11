@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+octave-workspace
+*.h5
+*.pt
+*.pth
+runs/
+data/generated/
+.DS_Store
