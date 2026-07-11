@@ -1,0 +1,19 @@
+# Fixed-width unstructured-triangle MLP baseline trained on exact cuts.
+seed: 0
+data:
+  mode: exact2d
+  n_samples: 2000
+  val_fraction: 0.2
+  mesh_type: delaunay
+  n_interior_range: [50, 150]
+  boundary_divisions: [8, 8]
+  curves: [line, circle]
+model:
+  type: mlp
+  hidden: [32, 32, 32]
+  dropout: 0.0
+train:
+  epochs: 60
+  lr: 0.001
+  batch_size: 32
+  threshold: 0.5

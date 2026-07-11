@@ -57,7 +57,8 @@ class EulerDG1D(DG1DBase):
         rho, _, p = conserved_to_primitive(U, self.gamma)
         return np.sqrt(self.gamma * np.maximum(p, 1e-13) / np.maximum(rho, 1e-13))
 
-    def max_speed(self, U):
+    def max_speed(self, u):
+        U = u
         _, u, _ = conserved_to_primitive(U, self.gamma)
         return float(np.max(np.abs(u) + self.sound_speed(U)))
 
@@ -68,7 +69,8 @@ class EulerDG1D(DG1DBase):
         U = u if u.ndim == 3 else self._U
         return self.cell_means(U[:, :, 1]) / self.cell_means(U[:, :, 0])
 
-    def rhs(self, U, time):
+    def rhs(self, u, time):
+        U = u
         FU = euler_flux(U, self.gamma)
         UM, UP = self._traces3(U)
         FM, FP = euler_flux(UM, self.gamma), euler_flux(UP, self.gamma)
@@ -100,7 +102,7 @@ class EulerDG1D(DG1DBase):
 
     def solve(
         self,
-        U0,
+        u0,
         final_time,
         indicator=None,
         limiter=None,
@@ -109,7 +111,7 @@ class EulerDG1D(DG1DBase):
     ):
         from tci.limiters import limit_cells
 
-        U = self.project(U0) if callable(U0) else np.array(U0, dtype=float)
+        U = self.project(u0) if callable(u0) else np.array(u0, dtype=float)
         if limiter is None:
             limiter = limit_cells
 

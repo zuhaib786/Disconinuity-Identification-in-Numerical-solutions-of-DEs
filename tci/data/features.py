@@ -32,3 +32,38 @@ def stencil_features(u, bc="periodic"):
     lo, hi = float(X.min()), float(X.max())
     scale = hi - lo if hi - lo > 1e-12 else 1.0
     return ((X - lo) / scale).astype(np.float32)
+
+
+def stencil_features2d(u, mesh, neighbors=None):
+    """Fixed-width, permutation-invariant P1 triangle stencil features."""
+    from tci.data.graphs import normalize_features, triangle_geometry_features
+
+    nodal = normalize_features(u)
+    means = np.mean(nodal, axis=1)
+    if neighbors is None:
+        neighbors = mesh.neighbors
+    neighbor_means = np.repeat(means[:, None], 3, axis=1)
+    valid = neighbors >= 0
+    neighbor_means[valid] = means[neighbors[valid]]
+    neighbor_means.sort(axis=1)
+
+    face_midpoints = np.column_stack(
+        [
+            0.5 * (nodal[:, face] + nodal[:, (face + 1) % 3])
+            for face in range(3)
+        ]
+    )
+    face_midpoints.sort(axis=1)
+    neighbor_face_means = neighbor_means.copy()
+    jumps = np.sort(np.abs(face_midpoints - neighbor_face_means), axis=1)
+    geometry = triangle_geometry_features(mesh)
+    return np.column_stack(
+        [
+            means,
+            np.min(nodal, axis=1),
+            np.max(nodal, axis=1),
+            neighbor_means,
+            jumps,
+            geometry,
+        ]
+    ).astype(np.float32)

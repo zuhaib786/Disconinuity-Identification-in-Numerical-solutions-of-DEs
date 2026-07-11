@@ -46,6 +46,34 @@ def star_state(rho_l, u_l, p_l, rho_r, u_r, p_r, gamma=GAMMA, tol=1e-10):
     return p, u
 
 
+def discontinuity_speeds(rho_l, u_l, p_l, rho_r, u_r, p_r, gamma=GAMMA):
+    """Speeds of the jump discontinuities in an Euler Riemann solution.
+
+    The contact is always included. Shock speeds are included when the
+    corresponding nonlinear wave is a shock; rarefaction heads and tails are
+    omitted because the exact solution is continuous across them.
+    """
+    p_s, u_s = star_state(rho_l, u_l, p_l, rho_r, u_r, p_r, gamma)
+    gm1, gp1 = gamma - 1.0, gamma + 1.0
+    speeds = []
+    if p_s > p_l:
+        c_l = np.sqrt(gamma * p_l / rho_l)
+        speeds.append(
+            u_l
+            - c_l
+            * np.sqrt(gp1 / (2 * gamma) * p_s / p_l + gm1 / (2 * gamma))
+        )
+    speeds.append(u_s)
+    if p_s > p_r:
+        c_r = np.sqrt(gamma * p_r / rho_r)
+        speeds.append(
+            u_r
+            + c_r
+            * np.sqrt(gp1 / (2 * gamma) * p_s / p_r + gm1 / (2 * gamma))
+        )
+    return np.asarray(speeds)
+
+
 def sample(xi, rho_l, u_l, p_l, rho_r, u_r, p_r, gamma=GAMMA):
     """Solution (rho, u, p) of the Riemann problem at similarity points
     xi = x/t. xi may be an array."""

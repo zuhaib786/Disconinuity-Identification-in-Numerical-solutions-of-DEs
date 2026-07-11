@@ -1,0 +1,26 @@
+# GNN trained on oscillatory solver-in-the-loop advection states.
+seed: 0
+data:
+  mode: numerical
+  n_samples: 2000
+  N: 1
+  k_range: [50, 150]
+  max_disc: 5
+  n_fourier: 15
+  crop: false
+  val_fraction: 0.2
+  a_range: [0.5, 1.0]
+  t_range: [0.1, 0.3]
+  cfl: 0.375
+model:
+  type: gnn
+  conv: gat
+  hidden: 32
+  heads: 8
+  dropout: 0.2
+  layers: 2
+train:
+  epochs: 60
+  lr: 0.001
+  batch_size: 32
+  threshold: 0.1

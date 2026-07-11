@@ -119,6 +119,7 @@ def _shu_osher_reference(T, K_ref=1600):
     if key not in _REFERENCE_CACHE:
         s = EulerDG1D(-5.0, 5.0, K=K_ref, N=2)
         U = s.solve(shu_osher_initial, T, indicator=MinmodIndicator())
+        assert isinstance(U, np.ndarray)
         _REFERENCE_CACHE[key] = (_centers(s), s.cell_means(U[:, :, 0]))
     return _REFERENCE_CACHE[key]
 
@@ -198,8 +199,10 @@ def compare_on(problem, indicators, **kwargs):
     for name, ind in indicators.items():
         try:
             results[name] = run_benchmark(problem, ind, **kwargs)[0]
-        except RuntimeError:
-            results[name] = {"diverged": True}
+        except RuntimeError as exc:
+            if not str(exc).startswith("solve diverged:"):
+                raise
+            results[name] = {"diverged": True, "reason": str(exc)}
     return results
 
 

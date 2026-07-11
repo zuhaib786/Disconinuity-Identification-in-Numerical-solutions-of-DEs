@@ -4,7 +4,8 @@ Port of the thesis data-generation procedures (sections 4.5.1 and 5.7.2 and
 legacy/1D/OneDimData.py): piecewise random Fourier series with up to
 ``max_disc`` jump discontinuities, sampled either exactly on the DG nodes
 ("exact" mode) or taken from a limited DG solve of the advection equation
-("numerical" mode). Mesh length is randomized per sample for the GNN.
+("numerical" mode). Random Euler Riemann solves provide nonlinear training
+states. Mesh length is randomized per sample for the GNN.
 """
 
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ class Sample:
 
     u: np.ndarray
     labels: np.ndarray
-    x: np.ndarray = None
+    x: np.ndarray | None = None
     disc_locs: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
@@ -135,9 +136,87 @@ def generate_numerical_samples(
         a = float(rng.uniform(*a_range))
         T = float(rng.uniform(*t_range))
         u = solver.advect(f, a, T, indicator=indicator, cfl=cfl)
+        assert isinstance(u, np.ndarray)
         adv_locs = lo + np.mod(locs + a * T - lo, width)
         labels = solver.cells_containing(adv_locs)
         if crop:
             u, labels = _crop(u, labels, rng)
         out.append(Sample(u=u, labels=labels, x=None, disc_locs=adv_locs))
+    return out
+
+
+def generate_euler_riemann_samples(
+    n_samples,
+    N=1,
+    k_range=(50, 150),
+    domain=(0.0, 1.0),
+    seed=0,
+    crop=False,
+    rho_range=(0.2, 2.0),
+    velocity_range=(-0.5, 0.5),
+    pressure_range=(0.1, 2.0),
+    diaphragm_range=(0.35, 0.65),
+    t_range=(0.03, 0.1),
+    cfl=0.2,
+    max_attempts=20,
+    **_ignored,
+):
+    """Density fields from minmod-limited random Euler Riemann problems.
+
+    Labels follow exact shock and contact trajectories. Rarefaction edges are
+    not labeled because the exact solution is continuous there.
+    """
+    from tci.indicators.classical import MinmodIndicator
+    from tci.solvers.euler import EulerDG1D, primitive_to_conserved
+    from tci.solvers.riemann import discontinuity_speeds
+
+    rng = np.random.default_rng(seed)
+    lo, hi = domain
+    width = hi - lo
+    kmin, kmax = k_range
+    out = []
+    for sample_id in range(n_samples):
+        for _ in range(max_attempts):
+            K = int(rng.integers(kmin, kmax + 1))
+            x0 = lo + float(rng.uniform(*diaphragm_range)) * width
+            T = float(rng.uniform(*t_range))
+            rho_l, rho_r = rng.uniform(*rho_range, size=2)
+            vel_l, vel_r = rng.uniform(*velocity_range, size=2)
+            p_l, p_r = rng.uniform(*pressure_range, size=2)
+            speeds = discontinuity_speeds(
+                rho_l, vel_l, p_l, rho_r, vel_r, p_r
+            )
+            locs = x0 + T * speeds
+            if np.any((locs <= lo) | (locs >= hi)):
+                continue
+
+            solver = EulerDG1D(lo, hi, K=K, N=N)
+
+            def initial(x):
+                left = x < x0
+                rho = np.where(left, rho_l, rho_r)
+                vel = np.where(left, vel_l, vel_r)
+                pressure = np.where(left, p_l, p_r)
+                return primitive_to_conserved(rho, vel, pressure)
+
+            try:
+                U = solver.solve(initial, T, indicator=MinmodIndicator(), cfl=cfl)
+            except RuntimeError as exc:
+                if not str(exc).startswith("solve diverged:"):
+                    raise
+                continue
+            assert isinstance(U, np.ndarray)
+            u = U[:, :, 0]
+            if not np.all(np.isfinite(u)) or np.min(u) <= 0:
+                continue
+            labels = solver.cells_containing(locs)
+            if crop:
+                u, labels = _crop(u, labels, rng)
+            out.append(Sample(u=u, labels=labels, x=None, disc_locs=locs))
+            break
+        else:
+            raise RuntimeError(
+                f"could not generate admissible Euler sample {sample_id} "
+                f"after {max_attempts} attempts"
+            )
     return out

@@ -1,6 +1,7 @@
 import numpy as np
 
 from tci.data.generate import (
+    generate_euler_riemann_samples,
     generate_exact_samples,
     generate_numerical_samples,
     random_piecewise_fourier,
@@ -43,3 +44,20 @@ def test_variable_mesh_lengths():
     samples = generate_exact_samples(10, k_range=(30, 120), seed=4)
     lengths = {s.u.shape[1] for s in samples}
     assert len(lengths) > 3
+
+
+def test_generate_euler_riemann_samples_runs_and_is_reproducible():
+    first = generate_euler_riemann_samples(
+        2, N=1, k_range=(20, 24), seed=7, t_range=(0.01, 0.02)
+    )
+    second = generate_euler_riemann_samples(
+        2, N=1, k_range=(20, 24), seed=7, t_range=(0.01, 0.02)
+    )
+    for a, b in zip(first, second):
+        assert a.u.shape[0] == 2
+        assert a.labels.shape == (a.u.shape[1],)
+        assert a.labels.dtype == bool
+        assert a.labels.any()
+        assert np.all(np.isfinite(a.u)) and np.min(a.u) > 0
+        assert np.array_equal(a.u, b.u)
+        assert np.array_equal(a.labels, b.labels)

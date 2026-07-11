@@ -28,6 +28,12 @@ class GNNIndicator(Indicator):
 
         from tci.data.graphs import normalize_features, path_edge_index
 
+        expected = int(self.model.hparams["in_dim"])
+        if u.shape[0] != expected:
+            raise ValueError(
+                f"GNN checkpoint expects {expected} nodal features (N={expected - 1}), "
+                f"but solver supplied {u.shape[0]} (N={u.shape[0] - 1})"
+            )
         feats = torch.from_numpy(normalize_features(u))
         edges = torch.from_numpy(path_edge_index(u.shape[1])).long()
         with torch.no_grad():
@@ -57,3 +63,70 @@ class MLPIndicator(Indicator):
         with torch.no_grad():
             prob = torch.sigmoid(self.model(feats)).numpy()
         return prob > self.threshold
+
+
+class GNN2DIndicator(Indicator):
+    """GNN indicator using P1 values and triangular-cell geometry features."""
+
+    def __init__(self, model_path=None, model=None, threshold=0.1):
+        from tci.models import GNNDetector
+
+        if model is None:
+            if model_path is None:
+                raise ValueError("provide model or model_path")
+            model = GNNDetector.load(model_path)
+        self.model = model.eval()
+        self.threshold = float(threshold)
+        self._mesh_cache = {}
+
+    def flag(self, solver, u):
+        import torch
+
+        from tci.data.graphs import triangle_geometry_features, triangle_solution_features
+
+        key = id(solver.mesh)
+        cached = self._mesh_cache.get(key)
+        if cached is None:
+            cached = (
+                triangle_geometry_features(solver.mesh),
+                torch.from_numpy(solver.mesh.graph_edge_index()).long(),
+            )
+            self._mesh_cache = {key: cached}
+        geometry, edges = cached
+        features = triangle_solution_features(u, solver.mesh, geometry)
+        expected = int(self.model.hparams["in_dim"])
+        if features.shape[1] != expected:
+            raise ValueError(
+                f"GNN checkpoint expects {expected} features, got {features.shape[1]}"
+            )
+        with torch.no_grad():
+            probability = torch.sigmoid(
+                self.model(torch.from_numpy(features), edges)
+            ).numpy()
+        return probability > self.threshold
+
+
+class MLP2DIndicator(Indicator):
+    """Fixed-width, permutation-invariant triangle-stencil MLP baseline."""
+
+    def __init__(self, model_path=None, model=None, threshold=0.5):
+        from tci.models import MLPDetector
+
+        if model is None:
+            if model_path is None:
+                raise ValueError("provide model or model_path")
+            model = MLPDetector.load(model_path)
+        self.model = model.eval()
+        self.threshold = float(threshold)
+
+    def flag(self, solver, u):
+        import torch
+
+        from tci.data.features import stencil_features2d
+
+        features = torch.from_numpy(
+            stencil_features2d(u, solver.mesh, solver.all_neighbors)
+        )
+        with torch.no_grad():
+            probability = torch.sigmoid(self.model(features)).numpy()
+        return probability > self.threshold

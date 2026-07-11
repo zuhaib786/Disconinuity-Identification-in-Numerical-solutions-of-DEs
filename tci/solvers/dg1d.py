@@ -214,6 +214,7 @@ class DG1D(DG1DBase):
         du = (uM - uP) * (a * self.nx - (1 - alpha) * np.abs(a * self.nx)) / 2.0
 
         if self.bc == "inflow":
+            assert self.bc_func is not None
             if a >= 0:
                 uin = self.bc_func(self.xmin - a * time)
                 du[0, 0] = (

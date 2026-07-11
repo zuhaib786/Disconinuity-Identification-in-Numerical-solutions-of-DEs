@@ -8,7 +8,7 @@ from tci.solvers.euler import (
     shu_osher_initial,
     sod_initial,
 )
-from tci.solvers.riemann import sod_exact, star_state
+from tci.solvers.riemann import discontinuity_speeds, sod_exact, star_state
 
 
 def test_primitive_conserved_roundtrip():
@@ -27,9 +27,17 @@ def test_riemann_star_state_sod():
     assert abs(u_s - 0.92745) < 1e-4
 
 
+def test_sod_discontinuity_speeds_are_contact_and_shock():
+    speeds = discontinuity_speeds(1.0, 0.0, 1.0, 0.125, 0.0, 0.1)
+    assert speeds.shape == (2,)  # left wave is a continuous rarefaction
+    assert abs(speeds[0] - 0.92745) < 1e-4
+    assert abs(speeds[1] - 1.75216) < 1e-4
+
+
 def test_sod_shock_tube():
     s = EulerDG1D(0.0, 1.0, K=200, N=1)
     U = s.solve(sod_initial, 0.2, indicator=MinmodIndicator())
+    assert isinstance(U, np.ndarray)
     rho = s.cell_means(U[:, :, 0])
     centers = 0.5 * (s.VX[:-1] + s.VX[1:])
     rho_ex, _, _ = sod_exact(centers, 0.2)
@@ -41,6 +49,7 @@ def test_sod_shock_tube():
 def test_shu_osher_stability():
     s = EulerDG1D(-5.0, 5.0, K=200, N=2)
     U = s.solve(shu_osher_initial, 1.8, indicator=MinmodIndicator())
+    assert isinstance(U, np.ndarray)
     rho = s.cell_means(U[:, :, 0])
     assert np.all(np.isfinite(U))
     assert rho.min() > 0.5 and rho.max() < 5.0

@@ -15,7 +15,7 @@ Examples:
 import argparse
 
 from tci.evaluate import compare_on, format_table
-from tci.indicators import get_indicator
+from tci.indicators import OrIndicator, get_indicator
 
 ALL_PROBLEMS = ["box", "burgers", "sod", "shu_osher"]
 
@@ -29,6 +29,13 @@ def build(name, args):
         return get_indicator(
             "mlp", model_path=args.mlp_model, threshold=args.mlp_threshold
         )
+    if name == "gnn-kxrcf":
+        return OrIndicator(
+            get_indicator(
+                "gnn", model_path=args.gnn_model, threshold=args.gnn_threshold
+            ),
+            get_indicator("kxrcf", threshold=args.kxrcf_threshold),
+        )
     return get_indicator(name)
 
 
@@ -38,11 +45,12 @@ def main():
                    choices=ALL_PROBLEMS + ["all"])
     p.add_argument("--indicators", nargs="+",
                    default=["minmod", "kxrcf", "pa"],
-                   choices=["minmod", "kxrcf", "pa", "gnn", "mlp"])
+                    choices=["minmod", "kxrcf", "pa", "gnn", "mlp", "gnn-kxrcf"])
     p.add_argument("--gnn-model", default="runs/gnn1d/model.pt")
     p.add_argument("--mlp-model", default="runs/mlp1d/model.pt")
     p.add_argument("--gnn-threshold", type=float, default=0.1)
     p.add_argument("--mlp-threshold", type=float, default=0.5)
+    p.add_argument("--kxrcf-threshold", type=float, default=1.0)
     args = p.parse_args()
 
     problems = ALL_PROBLEMS if "all" in args.problems else args.problems
