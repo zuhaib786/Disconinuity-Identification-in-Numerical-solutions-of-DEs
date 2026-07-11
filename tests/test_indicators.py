@@ -2,6 +2,7 @@ import numpy as np
 
 from tci.evaluate import box_initial
 from tci.indicators.classical import KXRCFIndicator, MinmodIndicator
+from tci.indicators.base import Indicator, OrIndicator
 from tci.indicators.pa import PAIndicator, polynomial_annihilation
 from tci.solvers.dg1d import DG1D
 
@@ -29,9 +30,11 @@ def test_minmod_flags_near_fronts_in_loop():
         indicator=MinmodIndicator(),
         record_flags=True,
     )
-    flags = hist[-1][1]
-    assert _near_jumps(flags, tol=10)
-    assert flags.sum() <= 12
+    # Union of flags over the run tracks the jump trajectories 40->45, 60->65.
+    union = np.any([f for _, f in hist], axis=0)
+    assert _near_jumps(union, tol=10)
+    assert union.sum() <= 30
+    assert max(f.sum() for _, f in hist) <= 12
 
 
 def test_kxrcf_flags_near_fronts_in_loop():
@@ -44,7 +47,8 @@ def test_kxrcf_flags_near_fronts_in_loop():
         indicator=KXRCFIndicator(threshold=1.0, a=1.0),
         record_flags=True,
     )
-    assert _near_jumps(hist[-1][1], tol=20)
+    union = np.any([f for _, f in hist], axis=0)
+    assert _near_jumps(union, tol=20)
 
 
 def test_pa_flags_box_edges_on_projection():
@@ -86,3 +90,23 @@ def test_tvb_flags_no_more_than_plain_minmod():
     tvb = MinmodIndicator(m_tvb=50.0).flag(solver, u).sum()
     assert plain > 0
     assert tvb <= plain
+
+
+def test_or_indicator_returns_exact_union():
+    class FixedIndicator(Indicator):
+        def __init__(self, flags):
+            self.flags = flags
+            self.calls = []
+
+        def flag(self, solver, u):
+            self.calls.append((solver, u))
+            return self.flags
+
+    solver = DG1D(0.0, 1.0, K=4, N=1)
+    u = solver.project(lambda x: x)
+    left = FixedIndicator(np.array([True, False, True, False]))
+    right = FixedIndicator(np.array([False, True, True, False]))
+    flags = OrIndicator(left, right).flag(solver, u)
+    assert np.array_equal(flags, [True, True, True, False])
+    assert flags.dtype == bool
+    assert left.calls == [(solver, u)] and right.calls == [(solver, u)]

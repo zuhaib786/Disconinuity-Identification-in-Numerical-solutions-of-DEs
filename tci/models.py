@@ -1,8 +1,11 @@
-"""GNN architectures for troubled-cell detection (requires tci[ml]).
+"""Learned troubled-cell detectors (requires tci[ml]).
 
-The default matches thesis Table 5.1: GATConv(in, 32, heads=8, dropout=0.2)
--> ELU -> GATConv(256, 1) -> sigmoid (applied in the loss / at predict time).
-``conv`` swaps the message-passing layer for ablations.
+GNNDetector default matches thesis Table 5.1: GATConv(in, 32, heads=8,
+dropout=0.2) -> ELU -> GATConv(256, 1) -> sigmoid (applied in the loss / at
+predict time); ``conv`` swaps the message-passing layer for ablations.
+
+MLPDetector is the fixed-stencil baseline in the style of Ray & Hesthaven
+(JCP 2018), operating on the 5 features of tci.data.features.
 """
 
 import torch
@@ -49,6 +52,39 @@ class GNNDetector(nn.Module):
         for conv in self.convs[:-1]:
             x = F.elu(conv(x, edge_index))
         return self.convs[-1](x, edge_index).squeeze(-1)
+
+    def save(self, path):
+        torch.save({"hparams": self.hparams, "state_dict": self.state_dict()}, path)
+
+    @classmethod
+    def load(cls, path, map_location="cpu"):
+        ckpt = torch.load(path, map_location=map_location, weights_only=True)
+        model = cls(**ckpt["hparams"])
+        model.load_state_dict(ckpt["state_dict"])
+        model.eval()
+        return model
+
+
+class MLPDetector(nn.Module):
+    """Per-cell MLP on the fixed 5-feature stencil (Ray-Hesthaven style)."""
+
+    def __init__(self, in_dim=5, hidden=(32, 32, 32), dropout=0.0):
+        super().__init__()
+        hidden = tuple(hidden)
+        self.hparams = dict(in_dim=in_dim, hidden=list(hidden), dropout=dropout)
+        layers = []
+        dim = in_dim
+        for h in hidden:
+            layers += [nn.Linear(dim, h), nn.LeakyReLU()]
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            dim = h
+        layers.append(nn.Linear(dim, 1))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """x: (num_cells, 5) -> per-cell logits (num_cells,)."""
+        return self.net(x).squeeze(-1)
 
     def save(self, path):
         torch.save({"hparams": self.hparams, "state_dict": self.state_dict()}, path)

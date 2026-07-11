@@ -43,10 +43,11 @@ class KXRCFIndicator(Indicator):
     the cell is flagged when I_k exceeds ``threshold`` (usually 1).
     """
 
-    def __init__(self, threshold=1.0, a=1.0):
+    def __init__(self, threshold=1.0, a=None):
         self.threshold = float(threshold)
-        # Sign of the advection speed decides which face is inflow.
-        self.a = float(a)
+        # Sign of the characteristic speed decides which face is inflow;
+        # a=None asks the solver for it per cell (solver.local_velocity).
+        self.a = a
 
     def flag(self, solver, u):
         if solver.bc == "periodic":
@@ -56,10 +57,13 @@ class KXRCFIndicator(Indicator):
             left_nb = np.concatenate(([u[0, 0]], u[-1, :-1]))
             right_nb = np.concatenate((u[0, 1:], [u[-1, -1]]))
 
-        if self.a >= 0:
-            jump = np.abs(u[0, :] - left_nb)
+        if self.a is None:
+            vel = solver.local_velocity(u)
         else:
-            jump = np.abs(u[-1, :] - right_nb)
+            vel = np.full(solver.K, float(self.a))
+        jump = np.where(
+            vel >= 0, np.abs(u[0, :] - left_nb), np.abs(u[-1, :] - right_nb)
+        )
 
         norm = np.max(np.abs(u), axis=0)
         scale = solver.h ** ((solver.N + 1) / 2.0) * norm
