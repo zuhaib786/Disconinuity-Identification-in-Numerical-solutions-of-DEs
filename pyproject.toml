@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tci"
+version = "0.1.0"
+description = "Troubled Cell Indicators for discontinuous Galerkin methods: classical, polynomial-annihilation, and graph-neural-network detectors"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Zuhaib Ul Zamann", email = "zuhaibulzaman.786@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.2",
+    "torch_geometric>=2.5",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["tci*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
