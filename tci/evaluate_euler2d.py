@@ -1,6 +1,7 @@
 """Bounded 2D Euler benchmark setups on triangular meshes."""
 
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -8,6 +9,7 @@ from tci.indicators.classical2d import MinmodIndicator2D
 from tci.mesh import forward_step_mesh, rectangular_mesh
 from tci.solvers.euler2d import (
     EulerDG2D,
+    EulerTimeoutError,
     conserved_to_primitive_2d,
     primitive_to_conserved_2d,
     reflective_boundary_2d,
@@ -96,31 +98,100 @@ def estimate_euler_setup(setup, cfl=0.05):
     steps = int(np.ceil(final_time / dt))
     indicator = MinmodIndicator2D()
     started = time.perf_counter()
-    solver.rhs(U)
-    indicator.flag(solver, U[:, :, 0])
-    seconds_per_stage = time.perf_counter() - started
+    U1 = U + dt * solver.rhs(U, 0.0)
+    U1 = solver._postprocess(U1, indicator)
+    U2 = 0.75 * U + 0.25 * (U1 + dt * solver.rhs(U1, dt))
+    U2 = solver._postprocess(U2, indicator)
+    candidate = U / 3.0 + 2.0 / 3.0 * (
+        U2 + dt * solver.rhs(U2, 0.5 * dt)
+    )
+    solver._postprocess(candidate, indicator)
+    seconds_per_step = time.perf_counter() - started
     return {
         "cells": solver.K,
         "steps": steps,
         "stable_dt": dt,
-        "estimated_runtime_s": 3.0 * steps * seconds_per_stage,
+        "seconds_per_initial_step": seconds_per_step,
+        "estimated_runtime_s": 1.5 * steps * seconds_per_step,
     }
 
 
-def run_euler_setup(setup, cfl=0.05, max_seconds=300.0):
+def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
     solver, U0, final_time = setup
     initial = solver.integral(U0)
-    started = time.perf_counter()
-    U = solver.solve(
-        U0,
-        final_time,
-        indicator=MinmodIndicator2D(),
-        cfl=cfl,
-        max_seconds=max_seconds,
+    start_time = 0.0
+    checkpoint_path = Path(checkpoint_path) if checkpoint_path is not None else None
+    if checkpoint_path is not None and checkpoint_path.exists():
+        with np.load(checkpoint_path, allow_pickle=False) as checkpoint:
+            U0 = checkpoint["U"]
+            start_time = float(checkpoint["time"])
+            saved_final_time = float(checkpoint["final_time"])
+        if U0.shape != (3, solver.K, 4) or not np.isclose(saved_final_time, final_time):
+            raise ValueError("Euler checkpoint is incompatible with this benchmark")
+        print(
+            f"resuming Euler checkpoint at t={start_time:.6g}/{final_time:.6g}",
+            flush=True,
+        )
+
+    initial_dt = solver.stable_dt(U0, cfl)
+    estimated_remaining_steps = max(
+        1, int(np.ceil((final_time - start_time) / initial_dt))
     )
+    progress_interval = max(1, estimated_remaining_steps // 100)
+    started = time.perf_counter()
+
+    def report(current_time, U, steps):
+        rho, _, _, pressure = conserved_to_primitive_2d(U)
+        elapsed = time.perf_counter() - started
+        fraction = current_time / final_time if final_time else 1.0
+        eta = elapsed * (1.0 - fraction) / fraction if fraction > 0 else float("inf")
+        print(
+            f"Euler progress: {100*fraction:6.2f}%  "
+            f"t={current_time:.6g}/{final_time:.6g}  steps={steps}  "
+            f"elapsed={elapsed:.1f}s  eta={eta:.1f}s  "
+            f"rho_min={np.min(rho):.3e}  p_min={np.min(pressure):.3e}",
+            flush=True,
+        )
+
+    try:
+        U = solver.solve(
+            U0,
+            final_time,
+            indicator=MinmodIndicator2D(),
+            cfl=cfl,
+            max_seconds=max_seconds,
+            start_time=start_time,
+            progress_callback=report,
+            progress_interval=progress_interval,
+        )
+    except EulerTimeoutError as exc:
+        if checkpoint_path is None:
+            raise
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            checkpoint_path,
+            U=exc.U,
+            time=exc.current_time,
+            final_time=exc.final_time,
+        )
+        rho, _, _, pressure = conserved_to_primitive_2d(exc.U)
+        return {
+            "status": "timeout",
+            "cells": solver.K,
+            "completed_time": exc.current_time,
+            "final_time": final_time,
+            "accepted_steps_this_run": exc.steps,
+            "runtime_s": time.perf_counter() - started,
+            "min_density": float(np.min(rho)),
+            "min_pressure": float(np.min(pressure)),
+            "checkpoint": str(checkpoint_path),
+        }
     runtime = time.perf_counter() - started
+    if checkpoint_path is not None:
+        checkpoint_path.unlink(missing_ok=True)
     rho, _, _, pressure = conserved_to_primitive_2d(U)
     return {
+        "status": "ok",
         "cells": solver.K,
         "runtime_s": runtime,
         "min_density": float(np.min(rho)),

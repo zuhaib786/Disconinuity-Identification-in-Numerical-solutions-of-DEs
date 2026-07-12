@@ -10,6 +10,20 @@ from tci.solvers.dg2d import AdvectionDG2D
 GAMMA = 1.4
 
 
+class EulerTimeoutError(TimeoutError):
+    """Wall-clock timeout carrying a restartable Euler state."""
+
+    def __init__(self, U, current_time, final_time, steps):
+        super().__init__(
+            f"2D Euler solve timed out at t={current_time:.6g}/{final_time:.6g} "
+            f"after {steps} accepted steps"
+        )
+        self.U = U
+        self.current_time = float(current_time)
+        self.final_time = float(final_time)
+        self.steps = int(steps)
+
+
 def primitive_to_conserved_2d(rho, u, v, p, gamma=GAMMA):
     return np.stack(
         [rho, rho * u, rho * v, p / (gamma - 1) + 0.5 * rho * (u * u + v * v)],
@@ -214,14 +228,18 @@ class EulerDG2D:
         cfl=0.1,
         max_seconds=None,
         max_retries=12,
+        start_time=0.0,
+        progress_callback=None,
+        progress_interval=100,
     ):
         U = self.project(U0) if callable(U0) else np.asarray(U0, dtype=float).copy()
         U = positivity_scale(U, self.gamma, self.rho_floor, self.p_floor)
         deadline = None if max_seconds is None else time.monotonic() + max_seconds
-        current_time = 0.0
+        current_time = float(start_time)
+        steps = 0
         while current_time < final_time - 1e-14:
             if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("2D Euler solve exceeded its wall-clock limit")
+                raise EulerTimeoutError(U, current_time, final_time, steps)
             dt = min(self.stable_dt(U, cfl), final_time - current_time)
             candidate = None
             for retry in range(max_retries + 1):
@@ -244,6 +262,11 @@ class EulerDG2D:
             assert candidate is not None
             U = candidate
             current_time += dt
+            steps += 1
+            if progress_callback is not None and steps % progress_interval == 0:
+                progress_callback(current_time, U, steps)
+        if progress_callback is not None:
+            progress_callback(current_time, U, steps)
         return U
 
     def _postprocess(self, U, indicator):

@@ -22,6 +22,12 @@ def main():
     parser.add_argument("--cfl", type=float, default=0.05)
     parser.add_argument("--max-seconds", type=float, default=300.0)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="restart checkpoint (default: <output>.checkpoint.npz)",
+    )
     args = parser.parse_args()
 
     if args.problem == "riemann":
@@ -32,9 +38,16 @@ def main():
         setup = forward_step_setup(3 * args.n, args.n, args.final_time or 4.0)
     estimate = estimate_euler_setup(setup, args.cfl)
     print(json.dumps({"estimate": estimate}, indent=2), flush=True)
+    checkpoint = args.checkpoint
+    if checkpoint is None and args.output is not None:
+        checkpoint = args.output.with_suffix(".checkpoint.npz")
     if estimate["estimated_runtime_s"] > args.max_seconds:
-        raise TimeoutError("estimated Euler runtime exceeds --max-seconds")
-    result = run_euler_setup(setup, args.cfl, args.max_seconds)
+        print(
+            "estimate exceeds this invocation limit; the run will checkpoint "
+            "and can be resumed with the same command",
+            flush=True,
+        )
+    result = run_euler_setup(setup, args.cfl, args.max_seconds, checkpoint)
     text = json.dumps({"estimate": estimate, "result": result}, indent=2)
     if args.output is not None:
         args.output.write_text(text + "\n")
