@@ -20,10 +20,31 @@ def main():
     args = parser.parse_args()
 
     rows = []
+    if args.output.exists() and args.output.stat().st_size:
+        try:
+            rows = json.loads(args.output.read_text())
+        except json.JSONDecodeError:
+            print(f"Ignoring incomplete output file {args.output}", flush=True)
+            rows = []
+    completed = {
+        (row["mesh"], row["threshold"])
+        for row in rows
+        if "mesh" in row and "threshold" in row
+    }
+    total = len(args.meshes) * len(args.thresholds)
+    print(f"Loaded {len(completed)}/{total} completed rows", flush=True)
     for mesh in args.meshes:
         for threshold in args.thresholds:
+            if (mesh, threshold) in completed:
+                print(f"Skipping completed row: mesh={mesh}, threshold={threshold}", flush=True)
+                continue
             indicator = GNN2DIndicator(model_path=args.model, threshold=threshold)
             estimate = estimate_rotation(indicator, args.n, mesh)
+            print(
+                f"Starting {len(rows) + 1}/{total}: mesh={mesh}, "
+                f"threshold={threshold:g}, estimate={estimate['estimated_runtime_s']:.1f}s",
+                flush=True,
+            )
             if estimate["estimated_runtime_s"] > args.max_seconds:
                 raise TimeoutError(f"estimate exceeds bound: {estimate}")
             metrics, _ = run_slotted_rotation(
@@ -34,6 +55,8 @@ def main():
             )
             rows.append({"mesh": mesh, "threshold": threshold, **metrics})
             args.output.write_text(json.dumps(rows, indent=2) + "\n")
+            completed.add((mesh, threshold))
+            print(f"Finished {len(rows)}/{total}", flush=True)
     print(json.dumps(rows, indent=2))
 
 
