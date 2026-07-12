@@ -43,6 +43,13 @@ python scripts/run_benchmarks.py --problems all \
     --gnn-model runs/gnn1d/model.pt --mlp-model runs/mlp1d/model.pt
 ```
 
+GPU training is selected automatically when CUDA is available. The saved
+checkpoint is moved back to CPU so it remains portable. Confirm the log says
+`training device: cuda`; set `train.device: cuda` to fail explicitly instead
+of falling back to CPU. On a Colab T4, increase `train.batch_size` to 64 or
+128 for the 2D GNN configs. Mesh generation and NumPy DG benchmarks remain
+CPU workloads.
+
 Representative results (L1 error of cell means vs the exact/fine-grid
 reference; "% flagged" is the mean fraction of cells limited per step):
 

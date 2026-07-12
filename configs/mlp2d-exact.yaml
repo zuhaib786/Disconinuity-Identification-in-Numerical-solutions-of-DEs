@@ -13,6 +13,7 @@ model:
   hidden: [32, 32, 32]
   dropout: 0.0
 train:
+  device: auto
   epochs: 60
   lr: 0.001
   batch_size: 32
