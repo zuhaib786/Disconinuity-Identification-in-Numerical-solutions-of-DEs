@@ -20,12 +20,34 @@ def main():
     args = parser.parse_args()
 
     rows = []
+    if args.output.exists() and args.output.stat().st_size:
+        try:
+            rows = json.loads(args.output.read_text())
+        except json.JSONDecodeError:
+            print(f"Ignoring incomplete output file {args.output}", flush=True)
+            rows = []
+    completed = {
+        (row["model"], row["mesh"], row["n"])
+        for row in rows
+        if "model" in row and "mesh" in row and "n" in row
+    }
+    total = len(args.models) * len(args.meshes) * len(args.resolutions)
+    print(f"Loaded {len(completed)}/{total} completed rows", flush=True)
     for model_path in args.models:
         for mesh in args.meshes:
             for n in args.resolutions:
+                key = (model_path, mesh, n)
+                if key in completed:
+                    print(f"Skipping completed row: {key}", flush=True)
+                    continue
                 indicator = GNN2DIndicator(model_path=model_path, threshold=args.threshold)
                 estimate = estimate_rotation(indicator, n, mesh)
                 row = {"model": model_path, "mesh": mesh, "n": n, "estimate": estimate}
+                print(
+                    f"Starting {len(rows) + 1}/{total}: model={model_path}, "
+                    f"mesh={mesh}, n={n}, estimate={estimate['estimated_runtime_s']:.1f}s",
+                    flush=True,
+                )
                 if estimate["estimated_runtime_s"] > args.max_seconds:
                     row["status"] = "skipped_estimate"
                 else:
@@ -41,6 +63,11 @@ def main():
                         row.update(status="timeout", reason=str(exc))
                 rows.append(row)
                 args.output.write_text(json.dumps(rows, indent=2) + "\n")
+                completed.add(key)
+                print(
+                    f"Finished {len(rows)}/{total}: status={row['status']}",
+                    flush=True,
+                )
     print(json.dumps(rows, indent=2))
 
 
