@@ -19,6 +19,7 @@ model:
   dropout: 0.2
   layers: 2
 train:
+  device: auto
   epochs: 60
   lr: 0.001
   batch_size: 32

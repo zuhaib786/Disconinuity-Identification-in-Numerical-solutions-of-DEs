@@ -39,7 +39,13 @@ DEFAULTS = {
         "dropout": 0.2,
         "layers": 2,
     },
-    "train": {"epochs": 60, "lr": 1e-3, "batch_size": 32, "threshold": 0.1},
+    "train": {
+        "epochs": 60,
+        "lr": 1e-3,
+        "batch_size": 32,
+        "threshold": 0.1,
+        "device": "auto",  # auto | cpu | cuda | cuda:N
+    },
 }
 
 
@@ -200,15 +206,17 @@ def _epoch_loop(model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, n_train):
     history = []
     for epoch in range(cfg["train"]["epochs"]):
         model.train()
-        total = 0.0
+        total = None
         for batch in loader:
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)
             logits, target, weight = batches_fn(batch)
             loss = loss_fn(logits, target)
             loss.backward()
             opt.step()
-            total += float(loss.detach()) * weight
-        train_loss = total / n_train
+            weighted_loss = loss.detach() * weight
+            total = weighted_loss if total is None else total + weighted_loss
+        assert total is not None
+        train_loss = float(total.cpu()) / n_train
 
         model.eval()
         with torch.no_grad():
@@ -231,6 +239,19 @@ def train(config, out_dir):
     seed = cfg["seed"]
     torch.manual_seed(seed)
     np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.set_float32_matmul_precision("high")
+
+    requested_device = str(cfg["train"].get("device", "auto"))
+    if requested_device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(requested_device)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+    cfg["train"]["resolved_device"] = str(device)
+    print(f"training device: {device}")
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -246,12 +267,13 @@ def train(config, out_dir):
     model_cfg = dict(cfg["model"])
     model_type = model_cfg.pop("type", "gnn")
     if model_type == "gnn":
-        model, history = _train_gnn(samples, n_val, model_cfg, cfg)
+        model, history = _train_gnn(samples, n_val, model_cfg, cfg, device)
     elif model_type == "mlp":
-        model, history = _train_mlp(samples, n_val, model_cfg, cfg)
+        model, history = _train_mlp(samples, n_val, model_cfg, cfg, device)
     else:
         raise ValueError(f"unknown model type {model_type!r}")
 
+    model.cpu()
     model.save(out / "model.pt")
     (out / "config.yaml").write_text(yaml.safe_dump(cfg))
     (out / "metrics.json").write_text(json.dumps(history, indent=2))
@@ -259,7 +281,7 @@ def train(config, out_dir):
     return model, history[-1]
 
 
-def _train_gnn(samples, n_val, model_cfg, cfg):
+def _train_gnn(samples, n_val, model_cfg, cfg, device):
     import torch
     from torch_geometric.loader import DataLoader
 
@@ -272,21 +294,36 @@ def _train_gnn(samples, n_val, model_cfg, cfg):
 
     first_x = dataset[0].x
     assert first_x is not None
-    model = GNNDetector(in_dim=first_x.shape[1], **model_cfg)
+    model = GNNDetector(in_dim=first_x.shape[1], **model_cfg).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
     loss_fn = torch.nn.BCEWithLogitsLoss()
-    loader = DataLoader(train_set, batch_size=cfg["train"]["batch_size"], shuffle=True)
+    loader = DataLoader(
+        train_set,
+        batch_size=cfg["train"]["batch_size"],
+        shuffle=True,
+        pin_memory=device.type == "cuda",
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=cfg["train"]["batch_size"],
+        shuffle=False,
+        pin_memory=device.type == "cuda",
+    )
 
     def batches_fn(batch):
+        batch = batch.to(device, non_blocking=device.type == "cuda")
         return model(batch.x, batch.edge_index), batch.y, batch.num_graphs
 
     def eval_fn():
         probs, trues = [], []
-        for d in val_set:
-            assert d.x is not None and d.edge_index is not None and d.y is not None
-            probs.append(torch.sigmoid(model(d.x, d.edge_index)).numpy())
-            trues.append(np.asarray(d.y).astype(bool))
-        return np.concatenate(trues), np.concatenate(probs)
+        for batch in val_loader:
+            batch = batch.to(device, non_blocking=device.type == "cuda")
+            probs.append(torch.sigmoid(model(batch.x, batch.edge_index)))
+            trues.append(batch.y)
+        return (
+            torch.cat(trues).cpu().numpy().astype(bool),
+            torch.cat(probs).cpu().numpy(),
+        )
 
     history = _epoch_loop(
         model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, len(train_set)
@@ -294,7 +331,7 @@ def _train_gnn(samples, n_val, model_cfg, cfg):
     return model, history
 
 
-def _train_mlp(samples, n_val, model_cfg, cfg):
+def _train_mlp(samples, n_val, model_cfg, cfg, device):
     import torch
     from torch.utils.data import DataLoader, TensorDataset
 
@@ -317,22 +354,27 @@ def _train_mlp(samples, n_val, model_cfg, cfg):
     X_val, y_val = to_xy(samples[:n_val])
     X_tr, y_tr = to_xy(samples[n_val:])
 
-    model = MLPDetector(in_dim=X_tr.shape[1], **model_cfg)
+    model = MLPDetector(in_dim=X_tr.shape[1], **model_cfg).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"])
     loss_fn = torch.nn.BCEWithLogitsLoss()
     loader = DataLoader(
         TensorDataset(X_tr, y_tr),
         batch_size=cfg["train"]["batch_size"] * 64,  # rows, not graphs
         shuffle=True,
+        pin_memory=device.type == "cuda",
     )
+    X_val_device = X_val.to(device, non_blocking=device.type == "cuda")
+    y_val_numpy = y_val.numpy().astype(bool)
 
     def batches_fn(batch):
         xb, yb = batch
+        xb = xb.to(device, non_blocking=device.type == "cuda")
+        yb = yb.to(device, non_blocking=device.type == "cuda")
         return model(xb), yb, len(xb)
 
     def eval_fn():
-        prob = torch.sigmoid(model(X_val)).numpy()
-        return y_val.numpy().astype(bool), prob
+        prob = torch.sigmoid(model(X_val_device)).cpu().numpy()
+        return y_val_numpy, prob
 
     history = _epoch_loop(
         model, opt, loss_fn, loader, batches_fn, eval_fn, cfg, len(X_tr)
