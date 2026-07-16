@@ -42,7 +42,14 @@ def main():
                     continue
                 indicator = GNN2DIndicator(model_path=model_path, threshold=args.threshold)
                 estimate = estimate_rotation(indicator, n, mesh)
-                row = {"model": model_path, "mesh": mesh, "n": n, "estimate": estimate}
+                row = {
+                    "model": model_path,
+                    "mesh": mesh,
+                    "n": n,
+                    "threshold": args.threshold,
+                    "max_seconds": args.max_seconds,
+                    "estimate": estimate,
+                }
                 print(
                     f"Starting {len(rows) + 1}/{total}: model={model_path}, "
                     f"mesh={mesh}, n={n}, estimate={estimate['estimated_runtime_s']:.1f}s",

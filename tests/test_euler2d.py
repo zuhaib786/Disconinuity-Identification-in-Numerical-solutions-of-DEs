@@ -10,6 +10,8 @@ from tci.solvers.euler2d import (
     positivity_scale,
     primitive_to_conserved_2d,
 )
+from tci.limiters2d import limit_p1, limit_p1_system
+from tci.evaluate_euler2d import four_quadrant_setup, run_euler_setup
 
 
 def constant_state(x, y):
@@ -74,6 +76,18 @@ def test_positivity_scaling_repairs_nodes_and_preserves_mean():
     assert np.allclose(np.mean(fixed, axis=0), before)
 
 
+def test_fused_euler_limiter_matches_scalar_component_passes():
+    solver = EulerDG2D(rectangular_mesh(nx=3, ny=2))
+    rng = np.random.default_rng(7)
+    U = rng.normal(size=(3, solver.K, 4))
+    flags = rng.random(solver.K) > 0.4
+    expected = np.stack(
+        [limit_p1(solver, U[:, :, component], flags) for component in range(4)],
+        axis=-1,
+    )
+    assert np.allclose(limit_p1_system(solver, U, flags), expected)
+
+
 def test_short_four_quadrant_solve_stays_admissible():
     mesh = rectangular_mesh(nx=4, ny=4)
     solver = EulerDG2D(mesh)
@@ -97,3 +111,24 @@ def test_short_four_quadrant_solve_stays_admissible():
     rho, _, _, p = conserved_to_primitive_2d(U)
     assert np.all(np.isfinite(U))
     assert np.min(rho) > 0 and np.min(p) > 0
+
+
+def test_euler_timeout_checkpoint_resumes(tmp_path):
+    checkpoint = tmp_path / "riemann.npz"
+    first = run_euler_setup(
+        four_quadrant_setup(2, 0.001),
+        cfl=0.05,
+        max_seconds=0.0,
+        checkpoint_path=checkpoint,
+    )
+    assert first["status"] == "timeout" and checkpoint.exists()
+
+    resumed = run_euler_setup(
+        four_quadrant_setup(2, 0.001),
+        cfl=0.05,
+        max_seconds=10.0,
+        checkpoint_path=checkpoint,
+    )
+    assert resumed["status"] == "ok"
+    assert not checkpoint.exists()
+    assert resumed["U"].shape[-1] == 4

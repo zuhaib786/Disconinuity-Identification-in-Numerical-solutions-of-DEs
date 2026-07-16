@@ -90,9 +90,16 @@ def run_slotted_rotation(
     l1 = float(
         np.sum(mesh.areas * np.abs(means - initial_means)) / np.sum(mesh.areas)
     )
+    l2 = float(
+        np.sqrt(
+            np.sum(mesh.areas * (means - initial_means) ** 2)
+            / np.sum(mesh.areas)
+        )
+    )
     metrics = {
         "cells": mesh.K,
         "l1_error": l1,
+        "l2_error": l2,
         "initial_total_variation": graph_total_variation(initial_means, mesh),
         "total_variation": graph_total_variation(means, mesh),
         "undershoot": max(0.0, -float(np.min(u))),

@@ -5,14 +5,12 @@ import numpy as np
 
 def neighbor_mean_bounds(solver, u):
     means = solver.cell_means(u)
-    lower = means.copy()
-    upper = means.copy()
-    for cell in range(solver.K):
-        neighbors = solver.all_neighbors[cell]
-        neighbors = neighbors[neighbors >= 0]
-        if len(neighbors):
-            values = means[np.concatenate([[cell], neighbors])]
-            lower[cell], upper[cell] = np.min(values), np.max(values)
+    neighbors = solver.all_neighbors
+    cells = np.arange(solver.K)[:, None]
+    safe_neighbors = np.where(neighbors >= 0, neighbors, cells)
+    neighbor_values = means[safe_neighbors]
+    lower = np.minimum(means, np.min(neighbor_values, axis=1))
+    upper = np.maximum(means, np.max(neighbor_values, axis=1))
     return means, lower, upper
 
 
@@ -23,14 +21,52 @@ def limit_p1(solver, u, flags):
     if flags.shape != (solver.K,):
         raise ValueError(f"flags have shape {flags.shape}, expected {(solver.K,)}")
     means, lower, upper = neighbor_mean_bounds(solver, u)
-    for cell in np.flatnonzero(flags):
-        delta = u[:, cell] - means[cell]
-        theta = 1.0
-        positive = delta > 0
-        negative = delta < 0
-        if np.any(positive):
-            theta = min(theta, float(np.min((upper[cell] - means[cell]) / delta[positive])))
-        if np.any(negative):
-            theta = min(theta, float(np.min((lower[cell] - means[cell]) / delta[negative])))
-        u[:, cell] = means[cell] + max(0.0, theta) * delta
-    return u
+    delta = u - means[None, :]
+    ratios = np.full_like(delta, np.inf)
+    np.divide(
+        upper[None, :] - means[None, :],
+        delta,
+        out=ratios,
+        where=delta > 0,
+    )
+    np.divide(
+        lower[None, :] - means[None, :],
+        delta,
+        out=ratios,
+        where=delta < 0,
+    )
+    theta = np.clip(np.min(ratios, axis=0), 0.0, 1.0)
+    theta = np.where(flags, theta, 1.0)
+    limited = means[None, :] + theta[None, :] * delta
+    limited[:, ~flags] = u[:, ~flags]
+    return limited
+
+
+def limit_p1_system(solver, U, flags):
+    """Fused component-wise Barth-Jespersen limiting for ``(3, K, C)``."""
+    U = np.asarray(U, dtype=float)
+    flags = np.asarray(flags, dtype=bool)
+    if U.ndim != 3 or U.shape[:2] != (3, solver.K):
+        raise ValueError(f"U has shape {U.shape}, expected (3, {solver.K}, C)")
+    if flags.shape != (solver.K,):
+        raise ValueError(f"flags have shape {flags.shape}, expected {(solver.K,)}")
+    means, lower, upper = neighbor_mean_bounds(solver, U)
+    delta = U - means[None, :, :]
+    ratios = np.full_like(delta, np.inf)
+    np.divide(
+        upper[None, :, :] - means[None, :, :],
+        delta,
+        out=ratios,
+        where=delta > 0,
+    )
+    np.divide(
+        lower[None, :, :] - means[None, :, :],
+        delta,
+        out=ratios,
+        where=delta < 0,
+    )
+    theta = np.clip(np.min(ratios, axis=0), 0.0, 1.0)
+    theta = np.where(flags[:, None], theta, 1.0)
+    limited = means[None, :, :] + theta[None, :, :] * delta
+    limited[:, ~flags, :] = U[:, ~flags, :]
+    return limited

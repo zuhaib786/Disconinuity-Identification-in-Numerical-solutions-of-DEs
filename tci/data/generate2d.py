@@ -23,6 +23,9 @@ class Sample2D:
     source: str = "exact"
     time: float = 0.0
     trajectory_id: int = -1
+    # Scale-free geometric cut labels, kept by `data-v3` as an offline
+    # diagnostic so the old and new label definitions stay comparable.
+    aux_labels: np.ndarray | None = None
 
 
 def cells_cut_by_line(mesh, point, normal):

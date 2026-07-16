@@ -77,23 +77,23 @@ class GNN2DIndicator(Indicator):
             model = GNNDetector.load(model_path)
         self.model = model.eval()
         self.threshold = float(threshold)
+        self.feature_schema = self.model.checkpoint_metadata.get(
+            "feature_schema", "ordered-global-v1"
+        )
         self._mesh_cache = {}
 
     def flag(self, solver, u):
         import torch
 
-        from tci.data.graphs import triangle_geometry_features, triangle_solution_features
+        from tci.data.graphs import TriangleFeatureBuilder
 
         key = id(solver.mesh)
-        cached = self._mesh_cache.get(key)
-        if cached is None:
-            cached = (
-                triangle_geometry_features(solver.mesh),
-                torch.from_numpy(solver.mesh.graph_edge_index()).long(),
-            )
-            self._mesh_cache = {key: cached}
-        geometry, edges = cached
-        features = triangle_solution_features(u, solver.mesh, geometry)
+        builder = self._mesh_cache.get(key)
+        if builder is None:
+            builder = TriangleFeatureBuilder(solver.mesh, self.feature_schema)
+            self._mesh_cache = {key: builder}
+        features, edge_attr = builder.build(u)
+        edges = torch.from_numpy(builder.edge_index).long()
         expected = int(self.model.hparams["in_dim"])
         if features.shape[1] != expected:
             raise ValueError(
@@ -101,7 +101,11 @@ class GNN2DIndicator(Indicator):
             )
         with torch.no_grad():
             probability = torch.sigmoid(
-                self.model(torch.from_numpy(features), edges)
+                self.model(
+                    torch.from_numpy(features),
+                    edges,
+                    None if edge_attr is None else torch.from_numpy(edge_attr),
+                )
             ).numpy()
         return probability > self.threshold
 

@@ -1,0 +1,38 @@
+# Phase 6 ladder step v3-A: the new reference label rule on the *old* exact
+# line/circle geometry and the old Delaunay mesh distribution.  Everything else
+# -- representation, capacity, optimizer, epochs, sample count, split protocol
+# -- is held at the frozen Phase 4 primary.  The data is the only changed factor.
+#
+# n_samples stays at the Phase 2/3/4 value of 2000 rather than the 4000 the plan
+# suggests, so that v3-A isolates the label rule against the frozen primary.
+seed: 0
+data:
+  seed: 0
+  split_seed: 0
+  mode: data-v3
+  n_samples: 2000
+  val_fraction: 0.2
+  data_v3:
+    ladder: v3-a
+    label: {alpha: 0.15, gamma: 2.0, quadrature_order: 8}
+    cache_dir: runs/data-v3
+model:
+  type: gnn
+  feature_schema: invariant-node-v2
+  edge_dim: null
+  conv: gat
+  hidden: 32
+  heads: 8
+  dropout: 0.2
+  layers: 2
+train:
+  seed: 0
+  device: auto
+  epochs: 60
+  lr: 0.001
+  batch_size: 64
+  threshold: 0.1
+  selection_metric: f1
+  patience: 10
+  min_delta: 0.0
+  ece_bins: 10

@@ -28,6 +28,12 @@ def main():
         default=None,
         help="restart checkpoint (default: <output>.checkpoint.npz)",
     )
+    parser.add_argument(
+        "--fields",
+        type=Path,
+        default=None,
+        help="final mesh/state NPZ (default: <output>.fields.npz)",
+    )
     args = parser.parse_args()
 
     if args.problem == "riemann":
@@ -48,6 +54,24 @@ def main():
             flush=True,
         )
     result = run_euler_setup(setup, args.cfl, args.max_seconds, checkpoint)
+    U = result.pop("U", None)
+    fields = args.fields
+    if fields is None and args.output is not None:
+        fields = args.output.with_suffix(".fields.npz")
+    if U is not None and fields is not None:
+        import numpy as np
+
+        solver, _, final_time = setup
+        fields.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            fields,
+            points=solver.mesh.points,
+            cells=solver.mesh.cells,
+            U=U,
+            cell_means=solver.cell_means(U),
+            final_time=final_time,
+        )
+        result["fields"] = str(fields)
     text = json.dumps({"estimate": estimate, "result": result}, indent=2)
     if args.output is not None:
         args.output.write_text(text + "\n")

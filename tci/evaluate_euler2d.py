@@ -120,12 +120,15 @@ def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
     solver, U0, final_time = setup
     initial = solver.integral(U0)
     start_time = 0.0
+    prior_runtime = 0.0
     checkpoint_path = Path(checkpoint_path) if checkpoint_path is not None else None
     if checkpoint_path is not None and checkpoint_path.exists():
         with np.load(checkpoint_path, allow_pickle=False) as checkpoint:
             U0 = checkpoint["U"]
             start_time = float(checkpoint["time"])
             saved_final_time = float(checkpoint["final_time"])
+            if "runtime_s" in checkpoint:
+                prior_runtime = float(checkpoint["runtime_s"])
         if U0.shape != (3, solver.K, 4) or not np.isclose(saved_final_time, final_time):
             raise ValueError("Euler checkpoint is incompatible with this benchmark")
         print(
@@ -144,7 +147,16 @@ def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
         rho, _, _, pressure = conserved_to_primitive_2d(U)
         elapsed = time.perf_counter() - started
         fraction = current_time / final_time if final_time else 1.0
-        eta = elapsed * (1.0 - fraction) / fraction if fraction > 0 else float("inf")
+        run_fraction = (
+            (current_time - start_time) / (final_time - start_time)
+            if final_time > start_time
+            else 1.0
+        )
+        eta = (
+            elapsed * (1.0 - run_fraction) / run_fraction
+            if run_fraction > 0
+            else float("inf")
+        )
         print(
             f"Euler progress: {100*fraction:6.2f}%  "
             f"t={current_time:.6g}/{final_time:.6g}  steps={steps}  "
@@ -173,6 +185,7 @@ def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
             U=exc.U,
             time=exc.current_time,
             final_time=exc.final_time,
+            runtime_s=prior_runtime + time.perf_counter() - started,
         )
         rho, _, _, pressure = conserved_to_primitive_2d(exc.U)
         return {
@@ -181,12 +194,12 @@ def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
             "completed_time": exc.current_time,
             "final_time": final_time,
             "accepted_steps_this_run": exc.steps,
-            "runtime_s": time.perf_counter() - started,
+            "runtime_s": prior_runtime + time.perf_counter() - started,
             "min_density": float(np.min(rho)),
             "min_pressure": float(np.min(pressure)),
             "checkpoint": str(checkpoint_path),
         }
-    runtime = time.perf_counter() - started
+    runtime = prior_runtime + time.perf_counter() - started
     if checkpoint_path is not None:
         checkpoint_path.unlink(missing_ok=True)
     rho, _, _, pressure = conserved_to_primitive_2d(U)
@@ -198,4 +211,5 @@ def run_euler_setup(setup, cfl=0.05, max_seconds=300.0, checkpoint_path=None):
         "min_pressure": float(np.min(pressure)),
         "max_density": float(np.max(rho)),
         "integral_change": np.abs(solver.integral(U) - initial).tolist(),
+        "U": U,
     }

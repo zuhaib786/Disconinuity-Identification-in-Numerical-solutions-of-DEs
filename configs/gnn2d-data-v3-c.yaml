@@ -1,0 +1,42 @@
+# Phase 6 ladder step v3-C: the full `data-v3` schema.  v3-B plus generator
+# component 4 -- evolved DG states from rotational advection, half of them
+# post-limiter, with 2-4 snapshots per trajectory and labels taken from the
+# exactly rotated reference field.  Snapshots of one trajectory stay on one
+# side of the train/validation split.
+#
+# Evolved trajectories use quality-controlled perturbed Delaunay and structured
+# meshes: an explicit solve on a random Delaunay mesh of the widened size range
+# is cost-prohibitive (measured: 502 s for a single t=0.2 trajectory at 1230
+# cells, against 11 s for a structured mesh of comparable size), because the
+# sliver cells of a random triangulation collapse the stable time step.
+seed: 0
+data:
+  seed: 0
+  split_seed: 0
+  mode: data-v3
+  n_samples: 2000
+  val_fraction: 0.2
+  data_v3:
+    ladder: v3-c
+    label: {alpha: 0.15, gamma: 2.0, quadrature_order: 8}
+    cache_dir: runs/data-v3
+model:
+  type: gnn
+  feature_schema: invariant-node-v2
+  edge_dim: null
+  conv: gat
+  hidden: 32
+  heads: 8
+  dropout: 0.2
+  layers: 2
+train:
+  seed: 0
+  device: auto
+  epochs: 60
+  lr: 0.001
+  batch_size: 64
+  threshold: 0.1
+  selection_metric: f1
+  patience: 10
+  min_delta: 0.0
+  ece_bins: 10

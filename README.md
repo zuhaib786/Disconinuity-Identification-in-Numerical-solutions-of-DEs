@@ -216,14 +216,37 @@ It is a negative ablation: label F1 fell to 0.242; it slightly reduced the
 unstructured undershoot (0.012 to 0.005) but doubled flags, and substantially
 worsened structured undershoot. The exact-data checkpoint remains primary.
 
+### `data-v3`: distribution-matched training data (rejected)
+
+The hypothesis that the deployment gap is a *training-distribution* artifact was
+tested and **rejected**. `tci/data/generate2d_v3.py` replaces the scale-free
+geometric cut labels by a resolution- and amplitude-aware rule computed from the
+reference field (`tci/data/labels2d.py`), and widens the data with an expanded
+signed-distance curve family, an amplitude and steep-layer continuum, smooth
+negatives, and evolved post-limiter DG states. A controlled three-step ladder
+(labels only, plus geometry, plus evolved states) was trained for five seeds
+each on fixed data/split IDs, changing only the data against the frozen primary.
+
+At the frozen threshold every step *increases* flagging (35.6% to 76.8%) at
+unchanged L2 error, and — decisively — on the new held-out set scored with the
+new labels the old primary reaches PR-AUC 0.355 against v3-C's 0.357. Matching
+the training distribution to deployment buys nothing even on its own
+distribution, which strengthens the representation-limit reading of the earlier
+feature ablations. Evidence: `runs/paper/phase6-*.json`; the label constants
+`alpha=0.15`, `gamma=2.0` were frozen on a held-out batch before any training
+(`runs/paper/phase6-label-calibration.json`).
+
 The fixed-P1 2D Euler solver now includes local Lax-Friedrichs fluxes,
 conserved-component limiting, all-cell density/pressure positivity scaling,
 SSP-RK stage rejection, periodic/transmissive/reflective boundaries, and
 wall-clock limits. Bounded positive smoke runs are available for four-quadrant
 Riemann, double Mach reflection, and a nonconvex forward-facing step under
-`runs/euler2d-*-smoke.json`. Full-resolution shock runs are intentionally left
-to the cluster harness because their local estimates exceed the runtime
-policy.
+`runs/euler2d-*-smoke.json`. Vectorized neighbor bounds, fused four-component
+limiting, and vectorized positivity repair reduced the full 3,200-cell,
+5,670-step Riemann run from 3,702.2 s to 139.9 s without changing its final
+extrema. The optimized runner also saves restart checkpoints and final fields;
+double-Mach and forward-step production estimates are now below 30 minutes on
+the local CPU but retain hard deadlines.
 
 `scripts/run_rotation2d.py` estimates completion time before solving and
 enforces `--max-seconds` both before and during each run. Numerical 2D

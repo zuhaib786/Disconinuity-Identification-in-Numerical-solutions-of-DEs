@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from tci.limiters2d import limit_p1
+from tci.limiters2d import limit_p1_system
 from tci.solvers.dg2d import AdvectionDG2D
 
 GAMMA = 1.4
@@ -71,37 +71,39 @@ def positivity_scale(U, gamma=GAMMA, rho_floor=1e-12, p_floor=1e-12):
     mean_pressure = pressure_2d(means, gamma)
     if np.any(mean_rho <= rho_floor) or np.any(mean_pressure <= p_floor):
         raise ValueError("Euler stage has a non-admissible cell mean")
-    for cell in range(U.shape[1]):
-        rho_min = float(np.min(U[:, cell, 0]))
-        if rho_min < rho_floor:
-            theta = min(
-                1.0,
-                (mean_rho[cell] - rho_floor) / (mean_rho[cell] - rho_min),
-            )
-            U[:, cell] = means[cell] + theta * (U[:, cell] - means[cell])
-        if np.min(pressure_2d(U[:, cell], gamma)) < p_floor:
-            direction = U[:, cell] - means[cell]
-            theta = 1.0
-            for node in range(3):
-                if pressure_2d(U[node, cell], gamma) >= p_floor:
-                    continue
-                lo, hi = 0.0, 1.0
-                for _ in range(60):
-                    mid = 0.5 * (lo + hi)
-                    trial = means[cell] + mid * direction[node]
-                    if pressure_2d(trial, gamma) >= p_floor:
-                        lo = mid
-                    else:
-                        hi = mid
-                theta = min(theta, lo)
-            U[:, cell] = means[cell] + theta * direction
+    rho_min = np.min(U[:, :, 0], axis=0)
+    density_theta = np.ones(U.shape[1])
+    bad_density = rho_min < rho_floor
+    density_theta[bad_density] = np.minimum(
+        1.0,
+        (mean_rho[bad_density] - rho_floor)
+        / (mean_rho[bad_density] - rho_min[bad_density]),
+    )
+    U = means[None, :, :] + density_theta[None, :, None] * (
+        U - means[None, :, :]
+    )
+
+    bad_pressure = pressure_2d(U, gamma) < p_floor
+    if np.any(bad_pressure):
+        direction = U - means[None, :, :]
+        lo = np.zeros((3, U.shape[1]))
+        hi = np.ones((3, U.shape[1]))
+        lo[~bad_pressure] = 1.0
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            trial = means[None, :, :] + mid[:, :, None] * direction
+            admissible = pressure_2d(trial, gamma) >= p_floor
+            update = bad_pressure & admissible
+            lo[update] = mid[update]
+            update = bad_pressure & ~admissible
+            hi[update] = mid[update]
+        pressure_theta = np.min(lo, axis=0)
+        U = means[None, :, :] + pressure_theta[None, :, None] * direction
     return U
 
 
 def limit_euler_p1(solver, U, flags):
-    limited = np.empty_like(U)
-    for component in range(4):
-        limited[:, :, component] = limit_p1(solver, U[:, :, component], flags)
+    limited = limit_p1_system(solver, U, flags)
     return positivity_scale(
         limited, solver.gamma, solver.rho_floor, solver.p_floor
     )

@@ -1,0 +1,37 @@
+# P5-LABEL-SAFETY-001 changes only the training labels: positives receive one
+# face-adjacent halo. Validation targets remain the original geometric labels.
+seed: 0
+data:
+  seed: 0
+  split_seed: 0
+  mode: exact2d
+  n_samples: 2000
+  val_fraction: 0.2
+  mesh_type: delaunay
+  n_interior_range: [50, 150]
+  boundary_divisions: [8, 8]
+  xlim: [0.0, 1.0]
+  ylim: [0.0, 1.0]
+  curves: [line, circle]
+  coefficient_sigma: 1.0
+model:
+  type: gnn
+  feature_schema: invariant-node-v2
+  edge_dim: null
+  conv: gat
+  hidden: 32
+  heads: 8
+  dropout: 0.2
+  layers: 2
+train:
+  seed: 0
+  device: auto
+  epochs: 60
+  lr: 0.001
+  batch_size: 64
+  threshold: 0.1
+  selection_metric: f1
+  patience: 10
+  min_delta: 0.0
+  ece_bins: 10
+  label_halo: 1
